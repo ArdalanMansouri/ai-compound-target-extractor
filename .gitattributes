@@ -1,2 +1,6 @@
 # Mark notebooks as documentation 
 *.ipynb linguist-documentation
+
+# Mark generated/exported output files so GitHub doesn't count them as the primary language
+*.html linguist-generated
+*.xlsx linguist-documentation

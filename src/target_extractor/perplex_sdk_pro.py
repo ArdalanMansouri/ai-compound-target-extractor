@@ -105,3 +105,27 @@ def markdown_to_df(md):
         lambda col: col.str.strip() if col.dtype == "object" else col
     )
     return df
+
+
+def word_frequency(df: pd.DataFrame, column: str, 
+                   min_count: int = 3) -> pd.DataFrame:
+    """Count word occurrences across all entries of a DataFrame column.
+
+    Args:
+        df: Input DataFrame.
+        column: Name of the column to analyse.
+        min_count: Minimum number of occurrences to include. Default is 3.
+
+    Returns:
+        A DataFrame with columns ['word', 'count'], sorted descending by count.
+    """
+    from collections import Counter
+    counter = Counter()
+    for entry in df[column].dropna():
+        counter.update(re.findall(r"\b[a-zA-Z]+\b", str(entry).lower()))
+    result = pd.DataFrame(counter.items(), columns=["word", "count"])
+    result = result[
+        result["count"] >= min_count
+        ].sort_values("count", ascending=False).reset_index(drop=True)
+    return result
+    

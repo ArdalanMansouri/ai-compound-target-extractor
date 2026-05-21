@@ -1,10 +1,8 @@
-> **Note:** The full cleaned and documented code will be available in two weeks. This repository currently contains a work-in-progress version.
-
----
-
 # AI Compound Target Extractor
 
 A Python toolkit for automated extraction of molecular targets from compound screening data using the Perplexity AI API, with built-in visualization and analysis utilities.
+
+## Background 
 
 ## Overview
 

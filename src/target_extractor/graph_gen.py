@@ -582,6 +582,14 @@ class Graph:
             )
 
         # Colorbars – dummy invisible scatter traces that carry the scale legend.
+        # Tick values: floor(min), midpoint, ceil(max) – guarantees full range coverage.
+        inh_tick_min = math.floor(inh_min * 10) / 10
+        inh_tick_max = math.ceil(inh_max * 10) / 10
+        inh_tick_mid = round((inh_tick_min + inh_tick_max) / 2, 1)
+        ind_tick_min = math.floor(ind_min * 10) / 10
+        ind_tick_max = math.ceil(ind_max * 10) / 10
+        ind_tick_mid = round((ind_tick_min + ind_tick_max) / 2, 1)
+
         # Inhibitor: light green (most negative / strongest) → dark green (weakest).
         fig.add_trace(
             go.Scatter(
@@ -590,9 +598,9 @@ class Graph:
                 mode="markers",
                 marker=dict(
                     colorscale=[[0, "rgb(210,255,210)"], [1, "rgb(0,60,0)"]],
-                    cmin=inh_scale_min,
-                    cmax=inh_scale_max,
-                    color=[inh_scale_min],
+                    cmin=inh_tick_min,
+                    cmax=inh_tick_max,
+                    color=[inh_tick_min],
                     showscale=True,
                     colorbar=dict(
                         title=dict(text="Inhibitor<br>log₂FC", side="right"),
@@ -600,7 +608,9 @@ class Graph:
                         y=0.25,
                         len=0.45,
                         thickness=14,
-                        tickformat=".2f",
+                        tickmode="array",
+                        tickvals=[inh_tick_min, inh_tick_mid, inh_tick_max],
+                        tickformat=".1f",
                         outlinewidth=1,
                     ),
                 ),
@@ -619,9 +629,9 @@ class Graph:
                 mode="markers",
                 marker=dict(
                     colorscale=[[0, "rgb(180,0,0)"], [1, "rgb(255,210,210)"]],
-                    cmin=ind_scale_min,
-                    cmax=ind_scale_max,
-                    color=[ind_scale_min],
+                    cmin=ind_tick_min,
+                    cmax=ind_tick_max,
+                    color=[ind_tick_min],
                     showscale=True,
                     colorbar=dict(
                         title=dict(text="Inducer<br>log₂FC", side="right"),
@@ -629,7 +639,9 @@ class Graph:
                         y=0.25,
                         len=0.45,
                         thickness=14,
-                        tickformat=".2f",
+                        tickmode="array",
+                        tickvals=[ind_tick_min, ind_tick_mid, ind_tick_max],
+                        tickformat=".1f",
                         outlinewidth=1,
                     ),
                 ),

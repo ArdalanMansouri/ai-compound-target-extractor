@@ -776,6 +776,100 @@ class Graph:
         print(f"Matches found: {n_matches}")
         return marked
 
+    
+
+    def compound_ranking(self, marked: pd.DataFrame) -> pd.DataFrame:
+        """Rank inhibitors and inducers by EV-uptake and annotate the marked table.
+
+        Builds two temporary ranked DataFrames from the master data:
+
+        * **Inhibitors** – sorted lowest-to-highest uptake; rank 1 is the
+          strongest inhibitor (lowest uptake value).
+        * **Inducers** – sorted highest-to-lowest uptake; rank 1 is the
+          strongest inducer (highest uptake value).
+
+        Both DataFrames are merged into a single lookup table. Every cell in
+        the *marked* table that carries a ``[X]`` suffix has its ``[X]``
+        stripped to recover the bare compound name, which is then looked up in
+        the ranking table. When a match is found the cell receives an
+        additional label in the format ``[Library, Function, Rank]`` appended
+        after the existing ``[X]``.
+
+        Library abbreviations: ``LOP`` (LOPAC), ``Prest`` (Prestwick).
+        Function abbreviations: ``Inh`` (Inhibitor), ``Ind`` (Inducer).
+
+        Example cell value after labelling::
+
+            "Cytochalasin D [X] [LOP, Ind, 2]"
+
+        Args:
+            marked: DataFrame returned by :meth:`compound_finder`, whose cells
+                may carry ``" [X]"`` suffixes.
+
+        Returns:
+            A copy of *marked* with matching cells additionally suffixed by
+            the ranking label. Cells without ``[X]`` are left untouched.
+        """
+        uptake_col = "Screen: EV-uptake_Normalized_by_mean"
+        library_col = "Library"
+        name_col = "Compound Name"
+        type_col = "Screen: Effect on EV uptake"
+
+        lib_abbr_map = {"LOPAC": "LOP", "Prestwick": "Prest"}
+        func_abbr_map = {"Inhibitor": "Inh", "Inducer": "Ind"}
+
+        # ── Inhibitors: rank 1 = lowest uptake (strongest inhibitor) ──────────
+        df_inh = (
+            self.df[self.df[type_col].astype(str).str.lower() == "inhibitor"]
+            [[name_col, uptake_col, library_col, type_col]]
+            .copy()
+            .sort_values(uptake_col, ascending=True)
+            .reset_index(drop=True)
+        )
+        df_inh["Rank"] = range(1, len(df_inh) + 1)
+
+        # ── Inducers: rank 1 = highest uptake (strongest inducer) ─────────────
+        df_ind = (
+            self.df[self.df[type_col].astype(str).str.lower() == "inducer"]
+            [[name_col, uptake_col, library_col, type_col]]
+            .copy()
+            .sort_values(uptake_col, ascending=False)
+            .reset_index(drop=True)
+        )
+        df_ind["Rank"] = range(1, len(df_ind) + 1)
+
+        # ── Merge and build name → label lookup ───────────────────────────────
+        df_ranked = pd.concat([df_inh, df_ind], ignore_index=True)
+
+        ranking_lookup: dict[str, str] = {}
+        for _, row in df_ranked.iterrows():
+            cname = str(row[name_col])
+            lib = lib_abbr_map.get(str(row[library_col]), str(row[library_col]))
+            func = func_abbr_map.get(str(row[type_col]), str(row[type_col]))
+            rank = int(row["Rank"])
+            ranking_lookup[cname] = f"[{lib}, {func}, {rank}]"
+
+        # ── Annotate the marked table ──────────────────────────────────────────
+        def add_ranking_label(val):
+            if not isinstance(val, str):
+                return val
+            # Strip [X] (if present) to recover the bare compound name
+            bare_name = val.replace(" [X]", "").strip()
+            rank_label = ranking_lookup.get(bare_name)
+            if rank_label is not None:
+                return val + " " + rank_label
+            return val
+
+        result = marked.copy()
+        result = result.apply(lambda col: col.map(add_ranking_label))
+        n_labelled = result.apply(
+            lambda col: col.map(
+                lambda v: isinstance(v, str) and re.search(r"\[.+,.+,\s*\d+\]", v) is not None
+            )
+        ).values.sum()
+        print(f"Ranking labels added: {n_labelled}")
+        return result
+
     def outliers_plot(
         self,
         df_outliers: pd.DataFrame,

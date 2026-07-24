@@ -227,6 +227,43 @@ class Graph:
             results.append((fc, str(cname), val))
         return sorted(results, key=lambda t: t[0])
 
+    @staticmethod
+    def _percentile_val(data: list, p: float) -> float:
+        """Return the p-th percentile (0–100) of a sorted or unsorted list."""
+        s = sorted(data)
+        n = len(s)
+        if n == 1:
+            return s[0]
+        idx = p / 100 * (n - 1)
+        lo = int(idx)
+        hi = min(lo + 1, n - 1)
+        return s[lo] + (idx - lo) * (s[hi] - s[lo])
+
+    @staticmethod
+    def _interpolate_color(
+        fc: float,
+        fc_min: float,
+        fc_max: float,
+        start: tuple,
+        end: tuple,
+        gamma: float = 0.45,
+    ) -> str:
+        """Map a single log2FC value to an RGB colour string.
+
+        ``fc_min`` maps to ``start``; ``fc_max`` maps to ``end``.
+        Values outside [fc_min, fc_max] are clamped to the extremes.
+        ``gamma`` < 1 stretches the middle of the range for better
+        perceptual contrast when differences are small.
+        """
+        t = (fc - fc_min) / (fc_max - fc_min) if fc_max != fc_min else 0.5
+        t = max(0.0, min(1.0, t))
+        t = t ** gamma
+        return "rgb({},{},{})".format(
+            int(start[0] + t * (end[0] - start[0])),
+            int(start[1] + t * (end[1] - start[1])),
+            int(start[2] + t * (end[2] - start[2])),
+        )
+
     # ------------------------------------------------------------------
     # Figure
     # ------------------------------------------------------------------
@@ -384,44 +421,14 @@ class Graph:
 
         name_col = "Compound Name"
 
-        def percentile_val(data: list, p: float) -> float:
-            """Return the p-th percentile (0–100) of a sorted or unsorted 
-            list."""
-            s = sorted(data)
-            n = len(s)
-            if n == 1:
-                return s[0]
-            idx = p / 100 * (n - 1)
-            lo = int(idx)
-            hi = min(lo + 1, n - 1)
-            return s[lo] + (idx - lo) * (s[hi] - s[lo])
-
-        def interpolate_color(fc: float, fc_min: float, fc_max: float,
-                               start: tuple, end: tuple,
-                               gamma: float = 0.45) -> str:
-            """Map a single log2FC value to an RGB colour string.
-
-            ``fc_min`` maps to ``start``; ``fc_max`` maps to ``end``.
-            Values outside [fc_min, fc_max] are clamped to the extremes.
-            ``gamma`` < 1 stretches the middle of the range for better
-            perceptual contrast when differences are small.
-            """
-            # first normalize fc to [0, 1] range
-            t = (fc - fc_min) / (fc_max - fc_min) if fc_max != fc_min else 0.5
-            t = max(0.0, min(1.0, t))
-            t = t ** gamma          # perceptual spread
-            return "rgb({},{},{})".format(
-                int(start[0] + t * (end[0] - start[0])),
-                int(start[1] + t * (end[1] - start[1])),
-                int(start[2] + t * (end[2] - start[2])),
-            )
-
         # ── per-keyword data ──────────────────────────────────────────────────
         normal_counts: dict = {}
         inh_data: dict = {}   # sorted list of (log2FC, name, ev_uptake) per keyword
         ind_data: dict = {}
         total_counts: dict = {}
 
+        # For each keyword, extract the subset of compounds and compute the 
+        # log2FC values for Inhibitors and Inducers.
         for kw in all_keys:
             df_kw = Graph._compounds_for_keyword(self.df, self.keyword_col, kw)
             type_s = df_kw[self.type_col].astype(str).str.lower()
@@ -452,10 +459,10 @@ class Graph:
 
         # Percentile-based scale endpoints (colour mapping + colorbars)
         _p = 5
-        inh_scale_min = percentile_val(all_inh_fc, _p)     if len(all_inh_fc) >= 4 else inh_min
-        inh_scale_max = percentile_val(all_inh_fc, 100-_p) if len(all_inh_fc) >= 4 else inh_max
-        ind_scale_min = percentile_val(all_ind_fc, _p)     if len(all_ind_fc) >= 4 else ind_min
-        ind_scale_max = percentile_val(all_ind_fc, 100-_p) if len(all_ind_fc) >= 4 else ind_max
+        inh_scale_min = Graph._percentile_val(all_inh_fc, _p)     if len(all_inh_fc) >= 4 else inh_min
+        inh_scale_max = Graph._percentile_val(all_inh_fc, 100-_p) if len(all_inh_fc) >= 4 else inh_max
+        ind_scale_min = Graph._percentile_val(all_ind_fc, _p)     if len(all_ind_fc) >= 4 else ind_min
+        ind_scale_max = Graph._percentile_val(all_ind_fc, 100-_p) if len(all_ind_fc) >= 4 else ind_max
 
         # ── figure ────────────────────────────────────────────────────────────
         all_totals = [total_counts[k] for k in all_keys]
@@ -514,8 +521,8 @@ class Graph:
                 if i < len(inh_data[k]) and total_counts[k]:
                     fc, cname, ev = inh_data[k][i]
                     y_vals.append(1 / total_counts[k] * 100)
-                    colors.append(interpolate_color(fc, inh_scale_min, inh_scale_max,
-                                                    (210, 255, 210), (0, 60, 0)))
+                    colors.append(Graph._interpolate_color(fc, inh_scale_min, inh_scale_max,
+                                                           (210, 255, 210), (0, 60, 0)))
                     customdata.append([cname, ev, fc])
                 else:
                     y_vals.append(0)
@@ -553,8 +560,8 @@ class Graph:
                 if i < len(ind_data[k]) and total_counts[k]:
                     fc, cname, ev = ind_data[k][i]
                     y_vals.append(1 / total_counts[k] * 100)
-                    colors.append(interpolate_color(fc, ind_scale_min, ind_scale_max,
-                                                    (180, 0, 0), (255, 210, 210)))
+                    colors.append(Graph._interpolate_color(fc, ind_scale_min, ind_scale_max,
+                                                           (180, 0, 0), (255, 210, 210)))
                     customdata.append([cname, ev, fc])
                 else:
                     y_vals.append(0)
@@ -745,21 +752,238 @@ class Graph:
 
         return pd.DataFrame(columns)
 
-    def compound_finder(self, compounds: list[str]) -> pd.DataFrame:
+    def scored_color_table(self) -> pd.DataFrame:
+        """Returns a DataFrame of RGB colour strings matching :meth:`scored_table`.
+
+        Same shape and column/row order as :meth:`scored_table`. Each cell
+        contains the ``"rgb(r,g,b)"`` string that would be used to colour the
+        corresponding compound slice in :meth:`scored_bar_plot`, or ``None``
+        for padding positions. Use :meth:`to_excel` to apply these colours as
+        cell background fills in an Excel workbook.
+
+        Returns:
+            A :class:`pandas.DataFrame` of ``"rgb(r,g,b)"`` strings (or
+            ``None``) with the same shape as :meth:`scored_table`.
+        """
+        avg_controls = {
+            "Prestwick": 0.007618627107104729,
+            "LOPAC": 0.038644386186536726,
+        }
+        uptake_col = "Screen: EV-uptake_Normalized_by_mean"
+        library_col = "Library"
+        name_col = "Compound Name"
+
+        by_type = self.keyword_counts_by_type()
+        all_keys = sorted(
+            set(by_type["Normal"][0])
+            | set(by_type["Inhibitor"][0])
+            | set(by_type["Inducer"][0]),
+            key=lambda v: v.lower(),
+        )
+
+        # Collect per-keyword data and global FC lists for the percentile scale
+        kw_data: dict = {}
+        all_inh_fc: list = []
+        all_ind_fc: list = []
+        for kw in all_keys:
+            df_kw = Graph._compounds_for_keyword(self.df, self.keyword_col, kw)
+            type_s = df_kw[self.type_col].astype(str).str.lower()
+            inh_list = Graph._compound_data_list(
+                df_kw[type_s == "inhibitor"], avg_controls, uptake_col, library_col, name_col
+            )
+            ind_list = Graph._compound_data_list(
+                df_kw[type_s == "inducer"], avg_controls, uptake_col, library_col, name_col
+            )
+            kw_data[kw] = (inh_list, ind_list)
+            all_inh_fc.extend(t[0] for t in inh_list)
+            all_ind_fc.extend(t[0] for t in ind_list)
+
+        _p = 5
+        inh_min = min(all_inh_fc) if all_inh_fc else -1.0
+        inh_max = max(all_inh_fc) if all_inh_fc else 0.0
+        ind_min = min(all_ind_fc) if all_ind_fc else 0.0
+        ind_max = max(all_ind_fc) if all_ind_fc else 1.0
+        inh_scale_min = Graph._percentile_val(all_inh_fc, _p)     if len(all_inh_fc) >= 4 else inh_min
+        inh_scale_max = Graph._percentile_val(all_inh_fc, 100-_p) if len(all_inh_fc) >= 4 else inh_max
+        ind_scale_min = Graph._percentile_val(all_ind_fc, _p)     if len(all_ind_fc) >= 4 else ind_min
+        ind_scale_max = Graph._percentile_val(all_ind_fc, 100-_p) if len(all_ind_fc) >= 4 else ind_max
+
+        columns: dict[str, list] = {}
+        for kw in all_keys:
+            inh_list, ind_list = kw_data[kw]
+            ordered_colors = (
+                [
+                    Graph._interpolate_color(
+                        fc, ind_scale_min, ind_scale_max, (180, 0, 0), (255, 210, 210)
+                    )
+                    for fc, _, _ in reversed(ind_list)
+                ]
+                + [
+                    Graph._interpolate_color(
+                        fc, inh_scale_min, inh_scale_max, (210, 255, 210), (0, 60, 0)
+                    )
+                    for fc, _, _ in reversed(inh_list)
+                ]
+            )
+            columns[kw] = ordered_colors
+
+        max_len = max((len(v) for v in columns.values()), default=0)
+        for kw in all_keys:
+            columns[kw] += [None] * (max_len - len(columns[kw]))
+
+        return pd.DataFrame(columns)
+
+    def to_excel(self, path: str, table_df: pd.DataFrame | None = None) -> None:
+        """Write the scored compound table to an Excel file with bar-matched cell colours.
+
+        Each cell's background fill is the exact RGB colour used for that
+        compound slice in :meth:`scored_bar_plot`, computed via
+        :meth:`scored_color_table`. Text on dark backgrounds is rendered white
+        for readability.
+
+        Args:
+            path: Destination ``.xlsx`` file path.
+            table_df: Compound name table to write. Accepts the output of
+                :meth:`scored_table`, :meth:`compound_finder`, or
+                :meth:`compound_ranking`. Defaults to :meth:`scored_table`.
+
+        Raises:
+            ImportError: If ``openpyxl`` is not installed.
+        """
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import PatternFill, Font
+        except ImportError as exc:
+            raise ImportError(
+                "openpyxl is required for to_excel(). Install it with: pip install openpyxl"
+            ) from exc
+
+        if table_df is None:
+            table_df = self.scored_table()
+        color_df = self.scored_color_table()
+
+        def _rgb_to_argb(rgb_str: str) -> str:
+            """Convert ``"rgb(r,g,b)"`` to openpyxl ARGB hex ``"FFrrggbb"``."""
+            m = re.match(r"rgb\((\d+),(\d+),(\d+)\)", rgb_str.replace(" ", ""))
+            if not m:
+                return "FFFFFFFF"
+            r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            return f"FF{r:02X}{g:02X}{b:02X}"
+
+        wb = Workbook()
+        ws = wb.active
+
+        # Header row
+        for col_idx, col_name in enumerate(table_df.columns, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=col_name)
+            cell.font = Font(bold=True)
+
+        # Data rows
+        n_color_rows = len(color_df)
+        for row_idx, row_vals in enumerate(table_df.itertuples(index=False), start=2):
+            for col_idx, val in enumerate(row_vals, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                color_row = row_idx - 2
+                color_col = col_idx - 1
+                if color_row < n_color_rows:
+                    rgb_str = color_df.iloc[color_row, color_col]
+                else:
+                    rgb_str = None
+                if isinstance(rgb_str, str):
+                    cell.fill = PatternFill(fill_type="solid", fgColor=_rgb_to_argb(rgb_str))
+                    m = re.match(r"rgb\((\d+),(\d+),(\d+)\)", rgb_str.replace(" ", ""))
+                    if m:
+                        luminance = 0.299 * int(m.group(1)) + 0.587 * int(m.group(2)) + 0.114 * int(m.group(3))
+                        if luminance < 128:
+                            cell.font = Font(color="FFFFFFFF")
+
+        wb.save(path)
+        print(f"Excel saved: {path}")
+
+    def mark_excel(
+        self,
+        input_path: str,
+        output_path: str,
+        compounds: list[str],
+    ) -> None:
+        """Mark matching compounds in an existing coloured Excel file with ``[X]``.
+
+        Loads *input_path* (typically produced by :meth:`to_excel`) and
+        appends ``" [X]"`` to every cell whose text value contains a name from
+        *compounds*. All cell background colours, fonts, borders, and column
+        widths are preserved exactly — nothing is touched except the text of
+        matching cells.
+
+        Args:
+            input_path:  Path to an existing ``.xlsx`` file (e.g. the output
+                of :meth:`to_excel`).
+            output_path: Destination path for the annotated file. May equal
+                *input_path* to overwrite in place.
+            compounds:   List of compound name strings to search for. Matching
+                is substring-based (same logic as :meth:`compound_finder`).
+
+        Raises:
+            ImportError: If ``openpyxl`` is not installed.
+        """
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            raise ImportError(
+                "openpyxl is required for mark_excel(). Install with: pip install openpyxl"
+            ) from exc
+
+        compound_set = set(compounds)
+        wb = load_workbook(input_path)
+        ws = wb.active
+
+        n_matches = 0
+        for row in ws.iter_rows():
+            for cell in row:
+                val = cell.value
+                if isinstance(val, str) and any(term in val for term in compound_set):
+                    cell.value = val + " [X]"
+                    n_matches += 1
+
+        wb.save(output_path)
+        print(f"Matches marked: {n_matches}")
+        print(f"Saved: {output_path}")
+
+    def compound_finder(
+        self,
+        compounds: list[str],
+        input_path: str | None = None,
+        output_path: str | None = None,
+    ) -> pd.DataFrame:
         """Search for compounds in the scored table and mark matches with ``[X]``.
 
         Calls :meth:`scored_table` to obtain the ranked compound table, then
-        scans every cell. Any cell whose value exactly matches a name in
-        *compounds* is suffixed with ``" [X]"``. All other cells are left
-        unchanged. ``None`` padding cells are never modified.
+        scans every cell. Any cell whose value contains a name from *compounds*
+        is suffixed with ``" [X]"``. All other cells are left unchanged.
+        ``None`` padding cells are never modified.
+
+        When *input_path* is supplied the method additionally loads that
+        ``.xlsx`` file (typically produced by :meth:`to_excel`) and appends
+        ``" [X]"`` to matching cells **without touching any cell formatting**
+        (colours, fonts, borders). The annotated workbook is saved to
+        *output_path*, or back to *input_path* if *output_path* is omitted.
+        This means the coloured Excel and the returned DataFrame are always
+        consistent.
 
         Args:
             compounds: List of compound name strings to search for. Matching
-                is case-sensitive and exact (no partial matches).
+                is substring-based (same as :meth:`mark_excel`).
+            input_path: Optional path to an existing coloured ``.xlsx`` file.
+                When provided the file is marked in-place and saved.
+            output_path: Destination path for the annotated Excel file.
+                Defaults to *input_path* (overwrites the source file).
 
         Returns:
             A copy of the :meth:`scored_table` DataFrame with matching compound
             names suffixed by ``" [X]"``.
+
+        Raises:
+            ImportError: If *input_path* is provided and ``openpyxl`` is not
+                installed.
         """
         df = self.scored_table()
         compound_set = set(compounds)
@@ -774,6 +998,10 @@ class Graph:
             lambda col: col.map(lambda v: v is not None and v.endswith(" [X]"))
         ).values.sum()
         print(f"Matches found: {n_matches}")
+
+        if input_path is not None:
+            self.mark_excel(input_path, output_path or input_path, compounds)
+
         return marked
 
     
@@ -869,6 +1097,9 @@ class Graph:
         ).values.sum()
         print(f"Ranking labels added: {n_labelled}")
         return result
+
+        
+
 
     def outliers_plot(
         self,

@@ -687,25 +687,32 @@ class Graph:
         return fig
     
 
-    def scored_table(self) -> pd.DataFrame:
+    def scored_table(self, colored_cells: bool = False) -> pd.DataFrame:
         """Returns a DataFrame matching the compound order in :meth:`scored_bar_plot`.
 
-        Each column is a keyword (Group). Each row contains the compound name
-        for that position in the stacked bar, ordered top-to-bottom as in the
-        chart:
+        Each column is a keyword (Group). Each row contains either the compound
+        name (default) or the ``"rgb(r,g,b)"`` bar-graph colour string, ordered
+        top-to-bottom as in the chart:
 
-        1. Strongest inducer first (highest log₂FC).
+        1. Strongest inducer first (highest log\u2082FC).
         2. Progressively weaker inducers.
-        3. Weakest inhibitor (least negative log₂FC, closest to 0).
-        4. Progressively stronger inhibitors down to the most negative log₂FC.
+        3. Weakest inhibitor (least negative log\u2082FC, closest to 0).
+        4. Progressively stronger inhibitors down to the most negative log\u2082FC.
 
         Only Inhibitor and Inducer compounds are included; Normal (control)
         compounds are excluded. Keywords with fewer compounds than the longest
         column are padded with ``None``.
 
+        Args:
+            colored_cells: When ``False`` (default) each cell holds the
+                compound name string. When ``True`` each cell holds the
+                ``"rgb(r,g,b)"`` colour string used in :meth:`scored_bar_plot`,
+                or ``None`` for padding positions.
+
         Returns:
             A :class:`pandas.DataFrame` whose columns are keyword names and
-            whose rows are compound names in the described order.
+            whose rows are compound names or colour strings in the described
+            order.
         """
         avg_controls = {
             "Prestwick": 0.007618627107104729,
@@ -724,114 +731,83 @@ class Graph:
         )
 
         columns: dict[str, list] = {}
-        for kw in all_keys:
-            df_kw = Graph._compounds_for_keyword(self.df, self.keyword_col, kw)
-            type_s = df_kw[self.type_col].astype(str).str.lower()
 
-            # sorted ascending: inh_list[0] = most negative (strongest inhibitor)
-            inh_list = Graph._compound_data_list(
-                df_kw[type_s == "inhibitor"], avg_controls, uptake_col, library_col, name_col
-            )
-            # sorted ascending: ind_list[0] = weakest inducer, ind_list[-1] = strongest
-            ind_list = Graph._compound_data_list(
-                df_kw[type_s == "inducer"], avg_controls, uptake_col, library_col, name_col
-            )
+        if colored_cells:
+            # Two-pass: first collect all FC values for the global percentile scale,
+            # then map each compound's FC to a colour string.
+            kw_data: dict = {}
+            all_inh_fc: list = []
+            all_ind_fc: list = []
+            for kw in all_keys:
+                df_kw = Graph._compounds_for_keyword(self.df, self.keyword_col, kw)
+                type_s = df_kw[self.type_col].astype(str).str.lower()
+                inh_list = Graph._compound_data_list(
+                    df_kw[type_s == "inhibitor"], avg_controls, uptake_col, library_col, name_col
+                )
+                ind_list = Graph._compound_data_list(
+                    df_kw[type_s == "inducer"], avg_controls, uptake_col, library_col, name_col
+                )
+                kw_data[kw] = (inh_list, ind_list)
+                all_inh_fc.extend(t[0] for t in inh_list)
+                all_ind_fc.extend(t[0] for t in ind_list)
 
-            # Top-to-bottom order in the chart:
-            #   strongest inducer → weakest inducer → weakest inhibitor → strongest inhibitor
-            ordered_names = (
-                [item[1] for item in reversed(ind_list)]   # inducers: strongest first
-                + [item[1] for item in reversed(inh_list)] # inhibitors: weakest first, most negative last
-            )
-            columns[kw] = ordered_names
+            _p = 5
+            inh_min = min(all_inh_fc) if all_inh_fc else -1.0
+            inh_max = max(all_inh_fc) if all_inh_fc else 0.0
+            ind_min = min(all_ind_fc) if all_ind_fc else 0.0
+            ind_max = max(all_ind_fc) if all_ind_fc else 1.0
+            inh_scale_min = Graph._percentile_val(all_inh_fc, _p)     if len(all_inh_fc) >= 4 else inh_min
+            inh_scale_max = Graph._percentile_val(all_inh_fc, 100-_p) if len(all_inh_fc) >= 4 else inh_max
+            ind_scale_min = Graph._percentile_val(all_ind_fc, _p)     if len(all_ind_fc) >= 4 else ind_min
+            ind_scale_max = Graph._percentile_val(all_ind_fc, 100-_p) if len(all_ind_fc) >= 4 else ind_max
 
-        max_len = max((len(v) for v in columns.values()), default=0)
-        for kw in all_keys:
-            lst = columns[kw]
-            lst += [None] * (max_len - len(lst))
-
-        return pd.DataFrame(columns)
-
-    def scored_color_table(self) -> pd.DataFrame:
-        """Returns a DataFrame of RGB colour strings matching :meth:`scored_table`.
-
-        Same shape and column/row order as :meth:`scored_table`. Each cell
-        contains the ``"rgb(r,g,b)"`` string that would be used to colour the
-        corresponding compound slice in :meth:`scored_bar_plot`, or ``None``
-        for padding positions. Use :meth:`to_excel` to apply these colours as
-        cell background fills in an Excel workbook.
-
-        Returns:
-            A :class:`pandas.DataFrame` of ``"rgb(r,g,b)"`` strings (or
-            ``None``) with the same shape as :meth:`scored_table`.
-        """
-        avg_controls = {
-            "Prestwick": 0.007618627107104729,
-            "LOPAC": 0.038644386186536726,
-        }
-        uptake_col = "Screen: EV-uptake_Normalized_by_mean"
-        library_col = "Library"
-        name_col = "Compound Name"
-
-        by_type = self.keyword_counts_by_type()
-        all_keys = sorted(
-            set(by_type["Normal"][0])
-            | set(by_type["Inhibitor"][0])
-            | set(by_type["Inducer"][0]),
-            key=lambda v: v.lower(),
-        )
-
-        # Collect per-keyword data and global FC lists for the percentile scale
-        kw_data: dict = {}
-        all_inh_fc: list = []
-        all_ind_fc: list = []
-        for kw in all_keys:
-            df_kw = Graph._compounds_for_keyword(self.df, self.keyword_col, kw)
-            type_s = df_kw[self.type_col].astype(str).str.lower()
-            inh_list = Graph._compound_data_list(
-                df_kw[type_s == "inhibitor"], avg_controls, uptake_col, library_col, name_col
-            )
-            ind_list = Graph._compound_data_list(
-                df_kw[type_s == "inducer"], avg_controls, uptake_col, library_col, name_col
-            )
-            kw_data[kw] = (inh_list, ind_list)
-            all_inh_fc.extend(t[0] for t in inh_list)
-            all_ind_fc.extend(t[0] for t in ind_list)
-
-        _p = 5
-        inh_min = min(all_inh_fc) if all_inh_fc else -1.0
-        inh_max = max(all_inh_fc) if all_inh_fc else 0.0
-        ind_min = min(all_ind_fc) if all_ind_fc else 0.0
-        ind_max = max(all_ind_fc) if all_ind_fc else 1.0
-        inh_scale_min = Graph._percentile_val(all_inh_fc, _p)     if len(all_inh_fc) >= 4 else inh_min
-        inh_scale_max = Graph._percentile_val(all_inh_fc, 100-_p) if len(all_inh_fc) >= 4 else inh_max
-        ind_scale_min = Graph._percentile_val(all_ind_fc, _p)     if len(all_ind_fc) >= 4 else ind_min
-        ind_scale_max = Graph._percentile_val(all_ind_fc, 100-_p) if len(all_ind_fc) >= 4 else ind_max
-
-        columns: dict[str, list] = {}
-        for kw in all_keys:
-            inh_list, ind_list = kw_data[kw]
-            ordered_colors = (
-                [
-                    Graph._interpolate_color(
-                        fc, ind_scale_min, ind_scale_max, (180, 0, 0), (255, 210, 210)
-                    )
-                    for fc, _, _ in reversed(ind_list)
-                ]
-                + [
-                    Graph._interpolate_color(
-                        fc, inh_scale_min, inh_scale_max, (210, 255, 210), (0, 60, 0)
-                    )
-                    for fc, _, _ in reversed(inh_list)
-                ]
-            )
-            columns[kw] = ordered_colors
+            for kw in all_keys:
+                inh_list, ind_list = kw_data[kw]
+                columns[kw] = (
+                    [
+                        Graph._interpolate_color(
+                            fc, ind_scale_min, ind_scale_max, (180, 0, 0), (255, 210, 210)
+                        )
+                        for fc, _, _ in reversed(ind_list)
+                    ]
+                    + [
+                        Graph._interpolate_color(
+                            fc, inh_scale_min, inh_scale_max, (210, 255, 210), (0, 60, 0)
+                        )
+                        for fc, _, _ in reversed(inh_list)
+                    ]
+                )
+        else:
+            for kw in all_keys:
+                df_kw = Graph._compounds_for_keyword(self.df, self.keyword_col, kw)
+                type_s = df_kw[self.type_col].astype(str).str.lower()
+                inh_list = Graph._compound_data_list(
+                    df_kw[type_s == "inhibitor"], avg_controls, uptake_col, library_col, name_col
+                )
+                ind_list = Graph._compound_data_list(
+                    df_kw[type_s == "inducer"], avg_controls, uptake_col, library_col, name_col
+                )
+                columns[kw] = (
+                    [item[1] for item in reversed(ind_list)]   # inducers: strongest first
+                    + [item[1] for item in reversed(inh_list)] # inhibitors: weakest first, most negative last
+                )
 
         max_len = max((len(v) for v in columns.values()), default=0)
         for kw in all_keys:
             columns[kw] += [None] * (max_len - len(columns[kw]))
 
         return pd.DataFrame(columns)
+
+    def scored_color_table(self) -> pd.DataFrame:
+        """Return the scored table with cell colours instead of compound names.
+
+        Convenience wrapper for ``scored_table(colored_cells=True)``.
+
+        Returns a DataFrame of the same shape as :meth:`scored_table` where
+        each cell holds the ``"rgb(r,g,b)"`` colour string used in
+        :meth:`scored_bar_plot`, or ``None`` for padding positions.
+        """
+        return self.scored_table(colored_cells=True)
 
     def to_excel(self, path: str, table_df: pd.DataFrame | None = None) -> None:
         """Write the scored compound table to an Excel file with bar-matched cell colours.
@@ -860,7 +836,7 @@ class Graph:
 
         if table_df is None:
             table_df = self.scored_table()
-        color_df = self.scored_color_table()
+        color_df = self.scored_table(colored_cells=True)
 
         def _rgb_to_argb(rgb_str: str) -> str:
             """Convert ``"rgb(r,g,b)"`` to openpyxl ARGB hex ``"FFrrggbb"``."""
@@ -1097,8 +1073,6 @@ class Graph:
         ).values.sum()
         print(f"Ranking labels added: {n_labelled}")
         return result
-
-        
 
 
     def outliers_plot(

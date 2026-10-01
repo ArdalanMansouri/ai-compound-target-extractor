@@ -461,8 +461,22 @@ class Graph:
         _p = 5
         inh_scale_min = Graph._percentile_val(all_inh_fc, _p)     if len(all_inh_fc) >= 4 else inh_min
         inh_scale_max = Graph._percentile_val(all_inh_fc, 100-_p) if len(all_inh_fc) >= 4 else inh_max
-        ind_scale_min = Graph._percentile_val(all_ind_fc, _p)     if len(all_ind_fc) >= 4 else ind_min
         ind_scale_max = Graph._percentile_val(all_ind_fc, 100-_p) if len(all_ind_fc) >= 4 else ind_max
+
+        # Keep inducer reds on the same effect-magnitude scale as the existing
+        # inhibitor gradient so weaker induction does not span the full palette.
+        ind_color_scale_max = max(abs(inh_scale_min), ind_scale_max, 0.0)
+        ind_color_gamma = 1.0
+        ind_colorscale = [
+            [
+                step / 20,
+                Graph._interpolate_color(
+                    step / 20, 0.0, 1.0, (165, 0, 0), (230, 95, 95),
+                    gamma=ind_color_gamma,
+                ),
+            ]
+            for step in range(21)
+        ]
 
         # ── figure ────────────────────────────────────────────────────────────
         all_totals = [total_counts[k] for k in all_keys]
@@ -560,8 +574,10 @@ class Graph:
                 if i < len(ind_data[k]) and total_counts[k]:
                     fc, cname, ev = ind_data[k][i]
                     y_vals.append(1 / total_counts[k] * 100)
-                    colors.append(Graph._interpolate_color(fc, ind_scale_min, ind_scale_max,
-                                                           (180, 0, 0), (255, 210, 210)))
+                    colors.append(Graph._interpolate_color(
+                        fc, 0.0, ind_color_scale_max, (165, 0, 0), (230, 95, 95),
+                        gamma=ind_color_gamma,
+                    ))
                     customdata.append([cname, ev, fc])
                 else:
                     y_vals.append(0)
@@ -593,9 +609,8 @@ class Graph:
         inh_tick_min = math.floor(inh_min * 10) / 10
         inh_tick_max = math.ceil(inh_max * 10) / 10
         inh_tick_mid = round((inh_tick_min + inh_tick_max) / 2, 1)
-        ind_tick_min = math.floor(ind_min * 10) / 10
-        ind_tick_max = math.ceil(ind_max * 10) / 10
-        ind_tick_mid = round((ind_tick_min + ind_tick_max) / 2, 1)
+        ind_tick_min = 0.0
+        ind_tick_max = ind_color_scale_max
 
         # Inhibitor: light green (most negative / strongest) → dark green (weakest).
         fig.add_trace(
@@ -635,7 +650,7 @@ class Graph:
                 y=[None],
                 mode="markers",
                 marker=dict(
-                    colorscale=[[0, "rgb(180,0,0)"], [1, "rgb(255,210,210)"]],
+                    colorscale=ind_colorscale,
                     cmin=ind_tick_min,
                     cmax=ind_tick_max,
                     color=[ind_tick_min],
@@ -647,7 +662,7 @@ class Graph:
                         len=0.45,
                         thickness=14,
                         tickmode="array",
-                        tickvals=[ind_tick_min, ind_tick_mid, ind_tick_max],
+                        tickvals=sorted(set([ind_tick_min, ind_max, ind_tick_max])),
                         tickformat=".1f",
                         outlinewidth=1,
                     ),
@@ -758,15 +773,18 @@ class Graph:
             ind_max = max(all_ind_fc) if all_ind_fc else 1.0
             inh_scale_min = Graph._percentile_val(all_inh_fc, _p)     if len(all_inh_fc) >= 4 else inh_min
             inh_scale_max = Graph._percentile_val(all_inh_fc, 100-_p) if len(all_inh_fc) >= 4 else inh_max
-            ind_scale_min = Graph._percentile_val(all_ind_fc, _p)     if len(all_ind_fc) >= 4 else ind_min
             ind_scale_max = Graph._percentile_val(all_ind_fc, 100-_p) if len(all_ind_fc) >= 4 else ind_max
+
+            ind_color_scale_max = max(abs(inh_scale_min), ind_scale_max, 0.0)
+            ind_color_gamma = 1.0
 
             for kw in all_keys:
                 inh_list, ind_list = kw_data[kw]
                 columns[kw] = (
                     [
                         Graph._interpolate_color(
-                            fc, ind_scale_min, ind_scale_max, (180, 0, 0), (255, 210, 210)
+                            fc, 0.0, ind_color_scale_max, (165, 0, 0), (230, 95, 95),
+                            gamma=ind_color_gamma,
                         )
                         for fc, _, _ in reversed(ind_list)
                     ]
